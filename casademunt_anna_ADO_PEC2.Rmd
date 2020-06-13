@@ -2,6 +2,7 @@
 title: |
   | Análisis de datos de RNA-seq
   | PAC2
+  | https://github.com/Turing78/ADO_PEC2
 author: "Anna Casademunt"
 date: "26/5/2020"
 output:
@@ -77,7 +78,7 @@ y el nivel alto ELI (infiltración extensiva de linfoides). Consideraremos las t
 
 ### 2.1. Procedimiento general de análisis
 
-El análisis se ha realizado en R-Studio siguiendo los pasos del estudio :
+El análisis se ha realizado en R-Studio siguiendo los pasos del estudio <https://github.com/aspteaching/omics_data_analysis-case_study_2-rna-seq>:
 
 1. Importar y seleccionar los datos
 2. Definir los modelos genéticos
@@ -93,6 +94,8 @@ El análisis se ha realizado en R-Studio siguiendo los pasos del estudio :
 * 9.3. Representando los resultados
 * 9.4. Anotación y exportación de los resultados
 * 9.5. Significación biológica 
+
+El código R no se muestra en el documento, pero puede encontrarse en  <https://github.com/Turing78/ADO_PEC2.git>.
 
 ### 2.2. Software utilizado
 
