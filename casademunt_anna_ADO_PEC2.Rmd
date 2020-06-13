@@ -1,0 +1,1364 @@
+---
+title: |
+  | Análisis de datos de RNA-seq
+  | PAC2
+author: "Anna Casademunt"
+date: "26/5/2020"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+link-citations: yes
+editor_options:
+  chunk_output_type: console
+bibliography: ADO_PAC2.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+# Abstract
+
+Disponemos de muestras de tejido tiroideo procedentes del repositorio GTEx, @Lonsdale2013, y pertenecientes a tres grupos: "Non infiltrated tissues" (NIT), "Small local infiltrates" (SFI), "Extensive lymphoid infiltrates" (ELI). Seleccionando 10 muestras de cada grupo, analizaremos los genes diferencialmente expresados separando por grupo y sexo sin considerar el efecto batch, y por grupo eliminando el efecto batch oculto.
+
+# Objetivos
+
+Realizaremos un análisis de los datos de expresión (RNA-Seq) para encontrar genes diferencialmente expresados (DEG) en estos 3 grupos.
+
+# Materiales y Métodos
+
+## 1. Datos, tipo y diseño experimental
+
+### 1.1. Naturaleza de los datos
+
+Los datos están preprocesados en una tabla de counts *counts.csv* con 56202 observaciones y 292 variables que corresponden a:
+
+* NIT: 236 muestras
+* SFI: 42 muestras
+* ELI: 14 muestras
+
+y una tabla *targets.csv* con 292 observaciones de 9 variables, que corresponden a los datos de cada muestra:
+
+* Experiment
+* SRA_Sample
+* Sample_Name
+* Grupo_analisis: 1-NIT, 2-SFI y 3-ELI
+* body_site: Thyroid
+* molecular_data_type. "Allele-Specific Expression" o "RNA SEQ(NGS)"
+* sex: "male" o "female"
+* Group: "NIT", "SFI" o "ELI"
+* Short_name
+
+Escogeremos aleatoriamente 10 muestras de cada grupo de análisis.
+
+### 1.2. Tipo de experimento
+
+El tipo de experimento es un análisis de genes diferencialmente expresados de RNA-seq y Allele-Specific Expression.
+
+### 1.3. Diseño experimental
+
+Para el diseño del experimento se considerarán dos factores:
+
+* *Grupo-analisis* que renombramos a simplemente grupo y que tiene tres niveles: el nivel de control NIT (tejido no infiltrado), el nivel medio SFI (infiltración pequeña local)
+y el nivel alto ELI (infiltración extensiva de linfoides). Consideraremos las tres comparaciones posibles: **SFI vs NIT**, **ELI vs NIT** y **ELI vs SFI**.
+
+* *Sexo*, comparación entre los dos niveles, femenino vs masculino, que pueden tener distinta expresión en el tejido tiroideo. En el gráfico [3.4.4 PCA plot] se ve una clara diferenciación. 
+
+## 2. Procedimiento y métodos
+
+### 2.1. Procedimiento general de análisis
+
+El análisis se ha realizado en R-Studio siguiendo los pasos del estudio :
+
+1. Importar y seleccionar los datos
+2. Definir los modelos genéticos
+3. El objeto DESeqDataSet y la fórmula de diseño
+4. Análisis exploratorio y visualización
+5. Análisis de expresión diferencial
+6. Representando los resultados
+7. Anotación y exportación de los resultados
+8. Significación biológica
+9. Eliminando efectos batch ocultos
+* 9.1. Usando SVA con DESeq2 
+* 9.2. Análisis de expresión diferencial
+* 9.3. Representando los resultados
+* 9.4. Anotación y exportación de los resultados
+* 9.5. Significación biológica 
+
+### 2.2. Software utilizado
+
+Se han instalado los paquetes para el análisis de RNA-seq que aparecen a continuación.
+
+```{r installPackages, message=FALSE, warning=FALSE}
+
+if(!require(EnsDb.Hsapiens.v75)) BiocManager::install("EnsDb.Hsapiens.v75")
+if(!require(DESeq2)) BiocManager::install("DESeq2")
+if(!require(apeglm)) BiocManager::install("apeglm")
+if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+if(!require(genefilter)) BiocManager::install("genefilter")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+if(!require(sva)) BiocManager::install("sva")
+if(!require(Gviz)) BiocManager::install("Gviz")
+if(!require(limma)) BiocManager::install("limma")
+if(!require(biomaRt)) BiocManager::install("biomaRt")
+if(!require(clusterProfiler)) BiocManager::install("clusterProfiler")
+if(!require(enrichplot)) BiocManager::install("enrichplot")
+
+if(!require(stringr)) install.packages("stringr")
+if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+if(!require(kableExtra)) install.packages("kableExtra", dep=TRUE)
+if(!require(tibble)) install.packages("tibble", dep=TRUE)
+
+```
+
+\newpage
+
+## 3. Pipeline
+
+## 3.1. Importar y seleccionar los datos.
+
+Importamos los datos del fichero targets y seleccionamos, con la semilla 5154 (parte de mi DNI), 10 muestras de cada grupo de análisis (NIT, SFI y ELI) usando la función *sample*. Lo guardamos en el data frame **subTargets**. 
+
+```{r importTargets, echo = FALSE}
+setwd(".")
+set.seed(5154)
+targets <- read.csv("./data/targets.csv",stringsAsFactors = FALSE)
+
+subTargets <- data.frame()
+nsamples <- 10
+for (grupo in unique(targets$Group))
+{
+  # Crear el subconjunto para cada grupo
+  subsetGp <- subset(targets,Group==grupo) 
+  n <- dim(subsetGp)[1]
+  samplesGp <- sample(n, nsamples)
+  subTargets <- rbind(subTargets,subsetGp[samplesGp,])
+}
+```
+
+A continuación leemos el fichero counts. Vemos el detalle de las 6 primeras columnas con *str*.
+
+```{r importCounts, echo = FALSE}
+counts <- read.csv2("./data/counts.csv",stringsAsFactors = FALSE, row.names = 1)
+str(counts[,1:6])
+```
+
+Las columnas de counts corresponden con la columna Sample_names en los targets, aunque los separadores son puntos en lugar de guiones. Sustituimos con *str_replace_all* y generamos el data frame **Datos** con las 30 columnas seleccionadas en el paso anterior. Mostramos las 10 primeras filas. Sustituimos los nombres de las columnas por el valor *SRA_Sample* de **SubTargets**.
+
+```{r generateDF, echo = FALSE}
+Datos <- data.frame(row.names = rownames(counts))
+library(stringr)
+for (nombre in subTargets$Sample_Name)
+{
+  cnombre <- str_replace_all(nombre,"-",".")
+  pos     <- match(cnombre,colnames(counts))
+  Datos   <- cbind(Datos,counts[,pos])
+}
+colnames(Datos) <- subTargets$SRA_Sample
+head(Datos)
+```
+
+Vemos que el nombre del tránscrito (o nombre de fila) termina con un punto y un número de versión. Lo eliminamos tal y como se ha sugerido en el foro de la PAC. 
+
+```{r cutVersion, echo = FALSE}
+rownames(Datos) <- gsub("\\..*", "", rownames(Datos), fixed = FALSE)
+```
+
+### 3.2. Definir los modelos genéticos
+
+Para conseguir los datos de los exones de cada tránscrito uso la librería **EnsDb.Hsapiens.v75**. La función *exonBy* filtra los valores requerimos a partir de los nombres de las filas de **Datos**.
+
+```{r importEnsDb, echo=FALSE, message=FALSE}
+library(EnsDb.Hsapiens.v75)
+edb <- EnsDb.Hsapiens.v75
+
+ebg <- exonsBy(edb, by="gene", filter=GeneIdFilter(rownames(Datos)))
+```
+
+Observamos que algunos exones no se han encontrado. Comprobamos con la función *which.max* a lo largo de cada fila que los counts en estos tránscritos no superan el 1, por lo que podemos eliminarlos.
+
+```{r correctionEnsDb, echo=FALSE}
+dif <- length(rownames(Datos))-length(ebg)
+
+datosnoedb = Datos[!row.names(Datos)%in%names(ebg),]
+
+maxcountnoedb<-apply(datosnoedb,1,which.max)
+
+Datos <- Datos[row.names(Datos)%in%names(ebg),]
+dif <- length(rownames(Datos))-length(ebg)
+```
+
+### 3.3. El objeto DESeqDataSet y la fórmula de diseño
+
+Cambiamos los nombres de las variables "Grupo_analisis" a "grupo" y "sex" a "sexo" y las factorizamos de forma que el grupo de referencia es *NIT* y el sexo de referencia *male*. 
+Construimos el objeto DESeqDataSet a partir de **Datos**, **subTargets** y la fórmula de diseño: *~ grupo + sexo*. Le añadimos la información de los exones obtenida en el apartado anterior como *rowRanges*. Vemos con una tabla que el número de casos está equilibrado por sexos.
+
+```{r factors, echo = FALSE}
+columnas <- colnames(subTargets)
+columnas[4]<- "grupo"
+columnas[7]<- "sexo"
+colnames(subTargets) <- columnas
+
+subTargets$grupo <- factor(subTargets$grupo, levels=c(1,2,3), labels = c("NIT","SFI","ELI")) 
+subTargets$sexo   <- factor(subTargets$sexo, levels=c("male","female"))
+
+table(subTargets$grupo,subTargets$sexo)
+```
+
+```{r message=FALSE, echo=FALSE}
+library("DESeq2")
+
+dds<- DESeqDataSetFromMatrix(countData = Datos,
+                        colData = subTargets,
+                        design = ~ grupo + sexo )
+rowRanges(dds)<-ebg
+```
+
+### 3.4. Análisis exploratorio y visualización
+
+Hay dos partes en este pipeline. En el primero se realizan transformaciones de los counts para explorar visualmente las relaciones entre las muestras. En la segunda parte se vuelve a los counts crudos originales para el testing estadístico. Esto es crítico ya que los métodos estadísticos dependen de los datos de counts originales para calcular la precisión de las medidas.
+
+#### 3.4.1 Pre-filtrando el dataset
+
+El pre-filtrado no es estrictamente necesario pero eliminando los counts bajos se reduce el tiempo de computación de las transformaciones siguientes. Filtramos un mínimo de 10 counts.
+
+```{r preFilter, echo=FALSE}
+pref <- nrow(dds)
+dds  <- dds[ rowSums(counts(dds)) >= 10 ]
+post <- nrow(dds)
+```
+
+Pasamos de `r pref` a `r post` filas a considerar.
+
+#### 3.4.2 La transformación estabilizando la varianza
+
+Aplicamos la función *vst* (variance stabilizing transformation), que es mucho más rápida de calcular y menos sensible a outliers de counts altos que la función *rlog* y está recomendada para datasets grandes. Obtenemos el objeto **vsd**.
+
+```{r vst, echo=FALSE}
+vsd <- vst(dds, blind = FALSE)
+```
+
+\newpage
+
+#### 3.4.3 Samples distances
+
+Visualizamos las distancias en **vsd** en el heatmap siguiente, usando la función *pheatmap*. Las distancias entre las muestras se proveen a la función manualmente.
+
+```{r sampleDist, echo = FALSE}
+sampleDists <- dist(t(assay(vsd)))
+```
+
+```{r pheatmap, echo=FALSE, message=FALSE, fig.align='center', fig.width=6, fig.height=4}
+library("pheatmap")
+library("RColorBrewer")
+
+sampleDistMatrix <- as.matrix( sampleDists )
+rownames(sampleDistMatrix) <- paste( vsd$grupo, vsd$sexo, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+#### 3.4.4 PCA plot
+
+Hacemos un gráfico PCA con los datos **vsd**. Cada combinación de grupo tiene un color y cada sexo una forma. Se ve una clara diferenciación en ambos factores.
+
+```{r pca,echo=FALSE, fig.align='center', fig.width=6, fig.height=3}
+library(ggplot2)
+pcaData <- plotPCA(vsd, intgroup = c("grupo","sexo"), returnData=TRUE)
+
+class(pcaData)
+ggplot(pcaData, aes(x = PC1, y = PC2, color = factor(grupo), shape = factor(sexo))) +
+geom_point(size =3, aes(fill=factor(grupo))) + 
+geom_point(size =3)
+```
+
+### 3.5. Análisis de expresión diferencial
+
+Ejecutamos el pipeline de expresión diferencial sobre los counts crudos con la función *DESeq*. Tiene sentido elevar en este caso el log2 fold change threshold para filtrar los valores más significativos.
+
+```{r, echo=FALSE}
+dds <- DESeq(dds, parallel =TRUE)
+```
+
+```{r, echo=FALSE}
+res1 <- results(dds, contrast=c("grupo","SFI","NIT"), lfcThreshold=0.5)
+```
+
+```{r, echo=FALSE}
+res2 <- results(dds, contrast=c("grupo","ELI","NIT"), lfcThreshold=0.5)
+```
+
+```{r, echo=FALSE}
+res3 <- results(dds, contrast=c("grupo","ELI","SFI"), lfcThreshold=0.5)
+```
+
+Mostramos el sumario de la comparación SFI vs NIT:
+
+```{r, echo=FALSE}
+summary(res1)
+```
+
+Mostramos el sumario de la comparación ELI vs NIT:
+
+```{r, echo=FALSE}
+summary(res2)
+```
+
+Y finalmente el de ELI vs SFI:
+
+```{r, echo=FALSE}
+summary(res3)
+```
+
+Si consideramos una fracción de falsos positivos del 5% acceptable podemos considerar todos los genes con un p-valor ajustado bajo 0.05 como significativos. Los genes que quedan de cada comparación son los siguientes:
+
+```{r, echo=FALSE}
+library(kableExtra)
+
+Nombres <- c("SFI_NIT","ELI_NIT","ELI_SFI")
+Sumas <- c()
+Sumas <-  c(Sumas, sum(res1$padj < 0.05, na.rm=TRUE) )
+Sumas <- c(Sumas, sum(res2$padj < 0.05, na.rm=TRUE) )
+Sumas <- c(Sumas, sum(res3$padj < 0.05, na.rm=TRUE))
+
+kable(matrix(Sumas,ncol =3), col.names = Nombres)
+```
+
+#### 3.5.1 SFI vs NIT
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+library(tibble)
+
+res1Sig <- subset(res1, padj < 0.05)
+
+as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.5.1 ELI vs NIT
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+res2Sig <- subset(res2, padj < 0.05)
+as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+, ) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.5.1 ELI vs SFI
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+res3Sig <- subset(res3, padj < 0.05)
+as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.5.1 Female vs Male
+
+Mostramos el sumario de la comparación Female vs Male:
+
+```{r, echo=FALSE}
+res4 <- results(dds, contrast = c("sexo", "female", "male"),lfcThreshold=0.5)
+```
+
+```{r, echo=FALSE}
+summary(res4)
+```
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+res4Sig <- subset(res4, padj < 0.1)
+as_tibble(head(res4Sig[ order(res4Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res4Sig[ order(res4Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+\newpage
+
+### 3.6. Representando los resultados
+
+#### 3.6.1 Counts-Plot
+
+Realizamos un Counts-Plot para la comparación ELI vs NIT. Se observa que el gen más significativo tiene un counts más elevado en SFI para mujeres que para hombres.
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+topGene2 <- rownames(res2)[which.min(res2$padj)]
+
+library("ggbeeswarm")
+
+geneCounts <- plotCounts(dds, gene = topGene2, intgroup = c("grupo","sexo"),
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = grupo, y = count, color = sexo, group = sexo)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+```
+
+#### 3.6.2 Diagrama de Venn
+
+Este diagrama nos sirve para ver las coincidencias entre los diferentes contrastes.
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+results.SFI_NIT <- as.data.frame(results(dds, contrast=c("grupo","SFI","NIT"))) %>% 
+  rownames_to_column("EnsemblID")  
+results.ELI_NIT <- as.data.frame(results(dds, contrast=c("grupo","ELI","NIT"))) %>% 
+  rownames_to_column("EnsemblID") 
+results.ELI_SFI <- as.data.frame(results(dds, contrast=c("grupo","ELI","SFI"))) %>% 
+  rownames_to_column("EnsemblID") 
+venn_data <- data.frame(SFI_NIT = results.SFI_NIT$padj<0.05,
+                        ELI_NIT = results.ELI_NIT$padj<0.05,
+                        ELI_SFI = results.ELI_SFI$padj<0.05)
+library(limma)
+vennDiagram(venn_data, cex=0.9)
+```
+
+\newpage
+
+#### 3.6.3 Clustering de los genes
+
+Seleccionamos los 20 genes con la varianza más alta, usando los datos **vsd** y hacemos un *pheatmap*.
+
+```{r message= FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+library("genefilter")
+topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
+
+mat  <- assay(vsd)[topVarGenes, ]
+mat  <- mat - rowMeans(mat)
+anno <- as.data.frame(colData(vsd)[, c("grupo","sexo")])
+pheatmap(mat, annotation_col = anno)
+```
+
+#### 3.6.4 Representando los cambios de expresión en el espacio genómico 
+
+Hemos añadido previamente los datos de los exones a **dds** como *rowranges*. Esto nos permite realizar un gráfico en el espacio genómico.
+
+```{r, message=FALSE,  echo=FALSE}
+res1GR <- results(dds, name="grupo_SFI_vs_NIT", format="GRanges")
+res1GR$log2FoldChange <- res1$log2FoldChange
+```
+
+Añadimos el símbolo del gen con la librería **org.Hs.eg.db** para mostrar los genes en el gráfico. Si no se encuentra se una el EnsemblID.
+
+
+```{r message=FALSE, echo=FALSE}
+library("org.Hs.eg.db")
+res1GR$symbol <- mapIds(org.Hs.eg.db, names(res1GR), "SYMBOL", "ENSEMBL")
+```
+
+El package *Gviz* nos sirve para representar los GRanges y la metadata asociada: los cambios en el log fold debidos a la infiltración. Se usa una ventana de un millón de pares de bases upstream y downstream des de el gen con el p valor más pequeño. Realizamos 3 gráficos:
+
+```{r message=FALSE, echo=FALSE}
+library("Gviz")
+topGene1 <- rownames(res1)[which.min(res1$padj)]
+window <- res1GR[topGene1] + 1e6
+strand(window) <- "*"
+res1GRsub <- res1GR[res1GR %over% window]
+naOrDup <- is.na(res1GRsub$symbol) | duplicated(res1GRsub$symbol)
+res1GRsub$group <- ifelse(naOrDup, names(res1GRsub), res1GRsub$symbol)
+```
+
+```{r, echo=FALSE}
+status <- factor(ifelse(res1GRsub$padj < 0.1 & !is.na(res1GRsub$padj), "sig", "notsig"))
+```
+ 
+\newpage 
+ 
+##### 3.6.4.1 SFI vs NIT
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+options(ucscChromosomeNames = FALSE)
+g <- GenomeAxisTrack()
+a <- AnnotationTrack(res1GRsub, name = "gene ranges", feature = status)
+d <- DataTrack(res1GRsub, data = "log2FoldChange", baseline = 0,
+               type = "h", name = "log2 fold change", strand = "+")
+plotTracks(list(g, d, a), groupAnnotation = "grupo",
+           notsig = "grey", sig = "hotpink")
+```
+
+\newpage
+
+##### 3.6.4.2 ELI vs NIT
+
+```{r, message=FALSE, echo=FALSE}
+res2GR <- results(dds, name="grupo_ELI_vs_NIT", format="GRanges")
+res2GR$log2FoldChange <- res2$log2FoldChange
+```
+
+```{r message=FALSE, echo=FALSE}
+library("org.Hs.eg.db")
+res2GR$symbol <- mapIds(org.Hs.eg.db, names(res2GR), "SYMBOL", "ENSEMBL")
+```
+
+```{r message=FALSE, echo=FALSE}
+library("Gviz")
+
+window <- res2GR[topGene2] + 1e6
+strand(window) <- "*"
+res2GRsub <- res2GR[res2GR %over% window]
+naOrDup <- is.na(res2GRsub$symbol) | duplicated(res2GRsub$symbol)
+res2GRsub$group <- ifelse(naOrDup, names(res2GRsub), res2GRsub$symbol)
+```
+
+```{r, echo=FALSE}
+status <- factor(ifelse(res2GRsub$padj < 0.1 & !is.na(res2GRsub$padj), "sig", "notsig"))
+```
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+options(ucscChromosomeNames = FALSE)
+g <- GenomeAxisTrack()
+a <- AnnotationTrack(res2GRsub, name = "gene ranges", feature = status)
+d <- DataTrack(res2GRsub, data = "log2FoldChange", baseline = 0,
+               type = "h", name = "log2 fold change", strand = "+")
+plotTracks(list(g, d, a), groupAnnotation = "grupo",
+           notsig = "grey", sig = "hotpink")
+```
+
+\newpage
+
+##### 3.6.4.3 Female vs Male
+
+En este caso se representan los cambios en el log fold por sexo.
+
+```{r, message=FALSE, echo=FALSE}
+res4GR <- results(dds, name="sexo_female_vs_male", format="GRanges")
+res4GR$log2FoldChange <- res4$log2FoldChange
+```
+
+```{r message=FALSE, echo=FALSE}
+library("org.Hs.eg.db")
+res4GR$symbol <- mapIds(org.Hs.eg.db, names(res4GR), "SYMBOL", "ENSEMBL")
+```
+
+
+```{r message=FALSE, echo=FALSE}
+library("Gviz")
+topGene4 <- rownames(res4)[which.min(res4$padj)]
+window <- res4GR[topGene4] + 1e6
+strand(window) <- "*"
+res4GRsub <- res4GR[res4GR %over% window]
+naOrDup <- is.na(res4GRsub$symbol) | duplicated(res4GRsub$symbol)
+res4GRsub$group <- ifelse(naOrDup, names(res4GRsub), res4GRsub$symbol)
+```
+
+```{r, echo=FALSE}
+status <- factor(ifelse(res4GRsub$padj < 0.1 & !is.na(res4GRsub$padj), "sig", "notsig"))
+```
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+options(ucscChromosomeNames = FALSE)
+g <- GenomeAxisTrack()
+a <- AnnotationTrack(res4GRsub, name = "gene ranges", feature = status)
+d <- DataTrack(res4GRsub, data = "log2FoldChange", baseline = 0,
+               type = "h", name = "log2 fold change", strand = "+")
+plotTracks(list(g, d, a), groupAnnotation = "grupo",
+           notsig = "grey", sig = "hotpink")
+```
+
+### 3.7. Anotación y exportación de los resultados
+
+Usamos la función *mapIds* de la librería **AnnotationDbi** para añadir información adicional a nuestra tabla de genes, que de momento sólo contiene EnsemblID. Los ordenamos por p-valor y mostramos los primeros 5, recortando la parte del medio del ID de Ensembl para ahorrar espacio.
+
+```{r message= FALSE, echo=FALSE}
+library("AnnotationDbi")
+```
+
+#### 3.7.1 SFI vs NIT
+
+```{r, message=FALSE, echo=FALSE}
+res1$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1Ordered <- res1[order(res1$pvalue),]
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res1Ordered) <- gsub("G00000", "", rownames(res1Ordered), fixed = FALSE)
+as_tibble(head(res1Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.7.2 ELI vs NIT
+
+```{r, message=FALSE, echo=FALSE}
+res2$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2Ordered <- res2[order(res2$pvalue),]
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res2Ordered) <- gsub("G00000", "", rownames(res2Ordered), fixed = FALSE)
+as_tibble(head(res2Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.7.3 ELI vs SFI
+
+```{r, message=FALSE, echo=FALSE}
+res3$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res3$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res3$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res3Ordered <- res3[order(res3$pvalue),]
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res3Ordered) <- gsub("G00000", "", rownames(res3Ordered), fixed = FALSE)
+as_tibble(head(res3Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.7.4 Female vs Male
+
+```{r, message=FALSE, echo=FALSE}
+res4$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res4),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res4$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res4),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res4$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res4),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res4Ordered <- res4[order(res4$pvalue),]
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res4Ordered) <- gsub("G00000", "", rownames(res4Ordered), fixed = FALSE)
+as_tibble(head(res4Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.7.5 Exportando los resultados
+
+Observamos que para muchos de los tránscritos no hay símbolo, entrezID ni nombre. Si extraemos el biotipo de gen usando la librería **biomart** obtenemos la siguiente tabla de la comparación ELI vs NIT (omitiendo los biotipos que reúnen menos de 500 tránscritos): 
+
+```{r biomaRt,echo=FALSE,message=FALSE,warning=FALSE}
+library("biomaRt")
+mart <- useMart("ENSEMBL_MART_ENSEMBL")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+
+ensLookup <- row.names(res2)
+
+annotLookup <- getBM(
+  mart=mart,
+  attributes=c("ensembl_gene_id", "gene_biotype"),
+  filter="ensembl_gene_id",
+  values=ensLookup,
+  uniqueRows=TRUE)
+
+annotLookup <- data.frame(
+  res2[match(annotLookup$ensembl_gene_id, ensLookup),],
+  annotLookup)
+
+colnames(annotLookup) <- 
+  c(colnames(res2),
+  c("ensembl_gene_id", "gene_biotype"))
+
+tabla <- table(is.na(annotLookup$symbol),annotLookup$gene_biotype)
+
+sigcol<- apply(tabla, 2, function(x) sum(x)>500)
+
+
+tablaFilter <- t(tabla[ ,sigcol])
+colnames(tablaFilter) <- c("SYMBOL","NO SYMBOL")
+
+kable(tablaFilter)
+```
+
+La mayoría de los tránscritos con símbolo son codificadores de proteina, y la mayoría sin símbolo son pseudogenes. Una buena explicación de qué son los speudogenes puede verse en @Zheng2006. Al considerar si se deben eliminar estos datos del fichero de resultados hay que tener en cuenta que se han realizado estudios en los que los pseudogenes han resultado ser relevantes, por ejemplo: @Poliseno2015. 
+
+Por lo tanto guardamos todos los datos en la carpeta de resultados como results_*comparación*.
+
+```{r, echo=FALSE}
+res1OrderedDF <- as.data.frame(res1Ordered)
+write.csv(res1OrderedDF, file = "./results/results_SFIvsNIT.csv")
+res2OrderedDF <- as.data.frame(res2Ordered)
+write.csv(res2OrderedDF, file = "./results/results_ELIvsNIT.csv")
+res3OrderedDF <- as.data.frame(res3Ordered)
+write.csv(res3OrderedDF, file = "./results/results_ELIvsSFI.csv")
+res4OrderedDF <- as.data.frame(res4Ordered)
+write.csv(res4OrderedDF, file = "./results/results_FemalevsMale.csv")
+```
+
+### 3.8 Significación biológica
+
+Interpretar los resultados comporta analizar la lista de genes obtenida y ver que funciones, procesos biológicos o pathways de moléculas aparecen con mayor frecuencia. Al filtrar los genes la selección debería ser menos restrictiva que la realizada anteriormente, por lo que quitamos el filtro por lfcThreshold. Usamos el paquete **ClusterProfile**, siguiendo las instrucciones que se encuentran en @Yu2020.
+
+Para empezar necesitamos un vector de genes para cada comparación escogida con el valor fold change ordenado de mayor a menor y el EntrezID como nombre de la fila. Se muestra el número de genes filtrado en cada caso:
+
+```{r prepare4ClusterProfile2, message =FALSE, echo=FALSE}
+
+topTab_SFIvsNIT <- as.data.frame(results(dds, contrast=c("grupo","SFI","NIT")))
+topTab_ELIvsNIT <- as.data.frame(results(dds, contrast=c("grupo","ELI","NIT")))
+topTab_ELIvsSFI <- as.data.frame(results(dds, contrast=c("grupo","ELI","SFI")))
+listOfTables <- list(SFIvsNIT  = topTab_SFIvsNIT,
+                     ELIvsNIT  = topTab_ELIvsNIT,
+                     ELIvsSFI  = topTab_ELIvsSFI
+                     )
+listOfSelected <- list()
+v_countNA <- c()
+for (i in 1:length(listOfTables)){
+  # select the toptable
+  topTab <- listOfTables[[i]]
+  # select the genes to be included in the analysis
+  whichGenes<-subset(topTab, padj<0.15)
+  v_countNA <- c(v_countNA,dim(whichGenes)[1])
+  whichGenes$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(whichGenes),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+  whichGenes <- subset(whichGenes,!is.na(entrez))
+  listOfSelected[[i]] <- whichGenes$log2FoldChange
+  names(listOfSelected[[i]])<-whichGenes$entrez
+  
+  listOfSelected[[i]] <- sort(listOfSelected[[i]], decreasing = TRUE)
+  names(listOfSelected)[i] <- names(listOfTables)[i]
+}
+kable(matrix(sapply(listOfSelected, length),ncol=3), col.names = names(listOfSelected))
+```
+
+Hemos eliminado los tránscritos que no tienen entrezID asociados. Si no lo hubiéramos hecho los números serían:
+
+```{r, echo = FALSE}
+kable(matrix(v_countNA,ncol =3), col.names = names(listOfSelected))
+```
+
+Hay funciones separadas para Gene Onthology y KEGG (pathway), *enrichGO* y *enrichKEGG*. Ejecutar la segunda opción no da resultados por lo que no se incluye. 
+
+```{r clusterProfilerGO2, echo=FALSE}
+library(clusterProfiler)
+library(enrichplot)
+# browseVignettes("clusterProfiler")
+
+comparisonsNames <- names(listOfSelected)
+
+for (i in 1:length(listOfSelected)){
+  geneList <- listOfSelected[[i]]
+  comparison <- comparisonsNames[i]
+  gene <- names(geneList)[abs(geneList) > 2]
+  
+  enrich.result <- enrichGO(gene = gene,
+                universe         = names(geneList),
+                OrgDb            = org.Hs.eg.db,
+                ont              = "ALL",
+                pAdjustMethod    = "BH",
+                pvalueCutoff     = 0.15,
+                qvalueCutoff     = 0.25,
+                readable      = TRUE)
+  
+  if (length(rownames(enrich.result@result)) != 0) {
+  write.csv(as.data.frame(enrich.result), 
+             file =paste0("./results/","ClusterProfileGO.Results.",comparison,".csv"), 
+             row.names = FALSE)
+    
+ pdf(file=paste0("./results/","ClusterProfileGOBarplot.",comparison,".pdf"))
+    print(barplot(enrich.result, showCategory = 10, font.size = 9, 
+            title = paste0("ClusterProfiler GO Pathway Analysis for ", comparison,". Barplot")))
+  dev.off()    
+    
+   edox <- setReadable(enrich.result, 'org.Hs.eg.db', 'ENTREZID')       
+  
+  pdf(file = paste0("./results/","ClusterProfileGOcnetplot.",comparison,".pdf"))
+    print(cnetplot(edox, showCategory = 5, foldChange=geneList ))
+  dev.off()  
+  }
+}
+```
+
+
+Mostramos el gráfico de red para la comparación SFI vs NIT, que es la única que da resultados:
+
+```{r cnetplot2.2, echo = FALSE, fig.cap="Net diagram showing the gene ontology for SFIvsNIT"}
+include_graphics("results/ClusterProfileGOcnetplot.SFIvsNIT.pdf")
+```
+
+\newpage
+
+I la tabla correspondiente:
+
+```{r tableCP2, echo=FALSE}
+Tab.react <- read.csv2(file.path("./results/ClusterProfileGO.Results.SFIvsNIT.csv"), 
+                       sep = ",", header = TRUE)
+
+Tab.react <- Tab.react[1:4, 1:5]
+knitr::kable(Tab.react, booktabs = TRUE, caption = "First rows and columns for ClusterProfiler GO on SFIvsNIT comparison")
+```
+
+
+### 3.9. Eliminando efectos batch ocultos
+
+Suponiendo que los 30 experimentos seleccionados no se han realizado en el mismo batch, es interesante intentar eliminar los efectos batch ocultos.
+
+#### 3.9.1 Usando SVA con DESeq2
+
+Para ello usamos la librería **sva**. Ésta crea las variables sustitutas SV1 Y SV2, que añadimos como columnas a los datos **dds** creando la nueva tabla **ddssva** y luego también al diseño. 
+
+```{r message=FALSE, echo=FALSE}
+library("sva")
+
+dat  <- counts(dds, normalized = TRUE)
+idx  <- rowMeans(dat) > 1
+dat  <- dat[idx, ]
+mod  <- model.matrix(~ grupo, colData(dds))
+mod0 <- model.matrix(~   1, colData(dds))
+svseq <- svaseq(dat, mod, mod0, n.sv = 2)
+```
+
+```{r, message=FALSE, echo=FALSE}
+ddssva <- dds
+ddssva$SV1 <- svseq$sv[,1]
+ddssva$SV2 <- svseq$sv[,2]
+design(ddssva) <- ~ SV1 + SV2 + grupo
+```
+
+#### 3.9.2 Análisis de expresión diferencial
+
+Ejecutamos el pipeline de expresión diferencial con el nuevo diseño usando la función *DESeq* sobre los datos **ddssva**. Usamos el mismo log2 fold change threshold para filtrar los valores más significativos.
+
+```{r, echo=FALSE}
+ddssva <- DESeq(ddssva, parallel =TRUE)
+```
+
+```{r, echo=FALSE}
+res1 <- results(ddssva, contrast=c("grupo","NIT","SFI"),lfcThreshold=0.5)
+```
+
+```{r, echo=FALSE}
+res2 <- results(ddssva, contrast=c("grupo","NIT","ELI"),lfcThreshold=0.5)
+```
+
+```{r, echo=FALSE}
+res3 <- results(ddssva, contrast=c("grupo","SFI","ELI"),lfcThreshold=0.5)
+```
+
+Mostramos el sumario de la comparación SFI vs NIT:
+
+```{r, echo=FALSE}
+summary(res1)
+```
+
+Mostramos el sumario de la comparación ELI vs NIT:
+
+```{r, echo=FALSE}
+summary(res2)
+```
+
+Y finalmente el de ELI vs SFI:
+
+```{r, echo=FALSE}
+summary(res3)
+```
+
+Si consideramos aceptable una fracción de falsos positivos del 5% podemos considerar todos los genes con un p-valor ajustado bajo 0.05 como significativos. Los genes que quedan de cada comparación son los siguientes:
+
+```{r, echo=FALSE}
+library(kableExtra)
+
+Nombres <- c("SFI_NIT","ELI_NIT","ELI_SFI")
+Sumas <- c()
+Sumas <-  c(Sumas, sum(res1$padj < 0.05, na.rm=TRUE) )
+Sumas <- c(Sumas, sum(res2$padj < 0.05, na.rm=TRUE) )
+Sumas <- c(Sumas, sum(res3$padj < 0.05, na.rm=TRUE))
+
+kable(matrix(Sumas,ncol =3), col.names = Nombres)
+```
+
+##### 3.9.2.1 SFI vs NIT
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+library(tibble)
+
+res1Sig <- subset(res1, padj < 0.05)
+
+as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+##### 3.9.2.2 ELI vs NIT
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+res2Sig <- subset(res2, padj < 0.05)
+as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+##### 3.9.2.3 ELI vs SFI
+
+Mostramos los genes significativos de los que se ha reducido más la expresión:
+
+```{r, echo=FALSE}
+res3Sig <- subset(res3, padj < 0.05)
+as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+Y aquellos en los que la expresión se ha incrementado más:
+
+```{r, echo=FALSE}
+as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange, decreasing = TRUE), ]),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+#### 3.9.3 Representando los resultados
+
+##### 3.9.3.1 Counts-Plot
+
+Realizamos un Counts-Plot para la comparación ELI vs NIT. Se observa un cambio: el gen más significativo aún tiene un counts más elevado en SFI para mujeres que para hombres, pero ahora tiene un counts más elevado para hombres en el grupo ELI.
+
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+topGene2 <- rownames(res2)[which.min(res2$padj)]
+
+library("ggbeeswarm")
+
+geneCounts <- plotCounts(dds, gene = topGene2, intgroup = c("grupo","sexo"),
+                         returnData = TRUE)
+ggplot(geneCounts, aes(x = grupo, y = count, color = sexo, group = sexo)) +
+  scale_y_log10() + geom_point(size = 3) + geom_line()
+```
+
+##### 3.9.3.2 Diagrama de Venn
+
+Este diagrama nos sirve para ver las coincidencias entre los diferentes contrastes.
+
+```{r, message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+
+results.sva.SFI_NIT <- as.data.frame(results(ddssva, contrast=c("grupo","SFI","NIT"))) %>% 
+  rownames_to_column("EnsemblID")  
+results.sva.ELI_NIT <- as.data.frame(results(ddssva, contrast=c("grupo","ELI","NIT"))) %>% 
+  rownames_to_column("EnsemblID") 
+results.sva.ELI_SFI <- as.data.frame(results(ddssva, contrast=c("grupo","ELI","SFI"))) %>% 
+  rownames_to_column("EnsemblID") 
+venn_data <- data.frame(SFI_NIT = results.sva.SFI_NIT$padj<0.05,
+                        ELI_NIT = results.sva.ELI_NIT$padj<0.05,
+                        ELI_SFI = results.sva.ELI_SFI$padj<0.05)
+vennDiagram(venn_data, cex=0.9)
+```
+
+```{r, echo=FALSE,eval=FALSE}
+
+venn_data1 <- data.frame(SFI_NIT = results.SFI_NIT$padj<0.05,
+                        sva_SFI_NIT = results.sva.SFI_NIT$padj<0.05
+                        )
+venn_data2 <- data.frame(ELI_NIT = results.ELI_NIT$padj<0.05,
+                        sva_ELI_NIT = results.sva.ELI_NIT$padj<0.05
+                        )
+venn_data3 <- data.frame(ELI_SFI = results.ELI_SFI$padj<0.05,
+                        sva_ELI_SFI = results.sva.ELI_SFI$padj<0.05
+                        )
+par(mfrow=c(1,3))
+vennDiagram(venn_data1, cex=0.9)
+vennDiagram(venn_data3, cex=0.9)
+vennDiagram(venn_data2, cex=0.9)
+```
+
+##### 3.9.3.3 Representando los cambios de expresión en el espacio genómico 
+
+Repetimos los gráficos para SFI vs NIT y ELI vs NIT para los datos **ddssva**.
+
+```{r, message=FALSE, echo=FALSE}
+res1GR <- results(ddssva, name="grupo_SFI_vs_NIT", format="GRanges")
+res1GR$log2FoldChange <- res1$log2FoldChange
+```
+
+```{r message=FALSE, echo=FALSE}
+library("org.Hs.eg.db")
+res1GR$symbol <- mapIds(org.Hs.eg.db, names(res1GR), "SYMBOL", "ENSEMBL")
+```
+
+```{r message=FALSE, echo=FALSE}
+library("Gviz")
+topGene1 <- rownames(res1)[which.min(res1$padj)]
+window <- res1GR[topGene1] + 1e6
+strand(window) <- "*"
+res1GRsub <- res1GR[res1GR %over% window]
+naOrDup <- is.na(res1GRsub$symbol) | duplicated(res1GRsub$symbol)
+res1GRsub$group <- ifelse(naOrDup, names(res1GRsub), res1GRsub$symbol)
+```
+
+```{r, echo=FALSE}
+status <- factor(ifelse(res1GRsub$padj < 0.1 & !is.na(res1GRsub$padj), "sig", "notsig"))
+```
+
+###### 3.9.3.4.1 SFI vs NIT
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+options(ucscChromosomeNames = FALSE)
+g <- GenomeAxisTrack()
+a <- AnnotationTrack(res1GRsub, name = "gene ranges", feature = status)
+d <- DataTrack(res1GRsub, data = "log2FoldChange", baseline = 0,
+               type = "h", name = "log2 fold change", strand = "+")
+plotTracks(list(g, d, a), groupAnnotation = "grupo",
+           notsig = "grey", sig = "hotpink")
+```
+
+###### 3.9.3.4.2 ELI vs NIT
+
+```{r, message=FALSE, echo=FALSE}
+res2GR <- results(ddssva, name="grupo_ELI_vs_NIT", format="GRanges")
+res2GR$log2FoldChange <- res2$log2FoldChange
+```
+
+```{r message=FALSE, echo=FALSE}
+library("org.Hs.eg.db")
+res2GR$symbol <- mapIds(org.Hs.eg.db, names(res2GR), "SYMBOL", "ENSEMBL")
+```
+
+
+```{r message=FALSE, echo=FALSE}
+library("Gviz")
+
+window <- res2GR[topGene2] + 1e6
+strand(window) <- "*"
+res2GRsub <- res2GR[res2GR %over% window]
+naOrDup <- is.na(res2GRsub$symbol) | duplicated(res2GRsub$symbol)
+res2GRsub$group <- ifelse(naOrDup, names(res2GRsub), res2GRsub$symbol)
+```
+
+```{r, echo=FALSE}
+status <- factor(ifelse(res2GRsub$padj < 0.1 & !is.na(res2GRsub$padj), "sig", "notsig"))
+```
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+options(ucscChromosomeNames = FALSE)
+g <- GenomeAxisTrack()
+a <- AnnotationTrack(res2GRsub, name = "gene ranges", feature = status)
+d <- DataTrack(res2GRsub, data = "log2FoldChange", baseline = 0,
+               type = "h", name = "log2 fold change", strand = "+")
+plotTracks(list(g, d, a), groupAnnotation = "grupo",
+           notsig = "grey", sig = "hotpink")
+```
+
+#### 3.9.4 Anotación y exportación de los resultados
+
+Usamos la función *mapIds* de la libreria **AnnotationDbi** para añadir información adicional a nuestra tabla de genes, que de momento sólo contiene EnsemblID. Los ordenamos por p-valor y mostramos los primeros 5, recortando la parte del medio del ID de Ensembl para ahorrar espacio.
+
+```{r message= FALSE, echo=FALSE}
+library("AnnotationDbi")
+```
+
+##### 3.9.4.1 SFI vs NIT
+
+```{r, echo=FALSE}
+res1$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res1$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res1),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res1) <- gsub("G00000", "", rownames(res1), fixed = FALSE)
+res1Ordered <- res1[order(res1$pvalue),]
+as_tibble(head(res1Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+##### 3.9.4.2 ELI vs NIT
+
+```{r, echo=FALSE}
+res2$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res2$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res2),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res2) <- gsub("G00000", "", rownames(res2), fixed = FALSE)
+res2Ordered <- res2[order(res2$pvalue),]
+as_tibble(head(res2Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+##### 3.9.4.3 ELI vs SFI
+
+```{r, echo=FALSE}
+res3$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res3$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+res3$genename <- mapIds(org.Hs.eg.db,
+                     keys=row.names(res3),
+                     column="GENENAME",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+# Recortamos los 0's de ensemblID para ahorrar espacio
+rownames(res3) <- gsub("G00000", "", rownames(res3), fixed = FALSE)
+res3Ordered <- res3[order(res3$pvalue),]
+as_tibble(head(res3Ordered),  rownames = pkgconfig::get_config("tibble::rownames", NA)
+) %>% rownames_to_column(var="EnsemblID")
+```
+
+##### 3.9.4.4  Exportando los resultados
+
+Los guardamos en la carpeta de resultados como results_sva_*comparación*.
+
+```{r, echo=FALSE}
+res1OrderedDF <- as.data.frame(res1Ordered)
+write.csv(res1OrderedDF, file = "./results/results_sva_SFIvsNIT.csv")
+res2OrderedDF <- as.data.frame(res2Ordered)
+write.csv(res2OrderedDF, file = "./results/results_sva_ELIvsNIT.csv")
+res3OrderedDF <- as.data.frame(res3Ordered)
+write.csv(res3OrderedDF, file = "./results/results_sva_ELIvsSFI.csv")
+```
+
+#### 3.9.5 Significación biológica
+
+Re-interpretamos los resultados con los nuevos datos **ddssva**. Este es el numero de genes que se obtienen para cada combinación:
+
+```{r prepare4ClusterProfile, echo=FALSE, message=FALSE}
+
+topTab_SFIvsNIT <- as.data.frame(results(ddssva, contrast=c("grupo","SFI","NIT")))
+topTab_ELIvsNIT <- as.data.frame(results(ddssva, contrast=c("grupo","ELI","NIT")))
+topTab_ELIvsSFI <- as.data.frame(results(ddssva, contrast=c("grupo","ELI","SFI")))
+listOfTables <- list(SFIvsNIT  = topTab_SFIvsNIT,
+                     ELIvsNIT  = topTab_ELIvsNIT,
+                     ELIvsSFI  = topTab_ELIvsSFI
+                     )
+listOfSelected <- list()
+for (i in 1:length(listOfTables)){
+  # select the toptable
+  topTab <- listOfTables[[i]]
+  # select the genes to be included in the analysis
+  whichGenes<-subset(topTab, padj<0.15)
+  whichGenes$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(whichGenes),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+  whichGenes <- subset(whichGenes,!is.na(entrez))
+  listOfSelected[[i]] <- whichGenes$log2FoldChange
+  names(listOfSelected[[i]])<-whichGenes$entrez
+  
+  listOfSelected[[i]] <- sort(listOfSelected[[i]], decreasing = TRUE)
+  names(listOfSelected)[i] <- names(listOfTables)[i]
+}
+kable(matrix(sapply(listOfSelected, length),ncol=3), col.names = names(listOfSelected))
+```
+
+```{r clusterProfilerGO, echo=FALSE, message=FALSE}
+library(clusterProfiler)
+library(enrichplot)
+
+comparisonsNames <- names(listOfSelected)
+
+for (i in 1:length(listOfSelected)){
+  geneList <- listOfSelected[[i]]
+  comparison <- comparisonsNames[i]
+  gene <- names(geneList)[abs(geneList) > 2]
+  
+  enrich.result <- enrichGO(gene = gene,
+                universe         = names(geneList),
+                OrgDb            = org.Hs.eg.db,
+                ont              = "ALL",
+                pAdjustMethod    = "BH",
+                pvalueCutoff     = 0.15,
+                qvalueCutoff     = 0.25,
+                readable      = TRUE)
+  
+  if (length(rownames(enrich.result@result)) != 0) {
+  write.csv(as.data.frame(enrich.result), 
+             file =paste0("./results/","SVAClusterProfileGO.Results.",comparison,".csv"), 
+             row.names = FALSE)
+    
+ pdf(file=paste0("./results/","SVAClusterProfileGOBarplot.",comparison,".pdf"))
+    print(barplot(enrich.result, showCategory = 10, font.size = 9, 
+            title = paste0("ClusterProfiler GO Pathway Analysis for ", comparison,". Barplot")))
+  dev.off()    
+    
+   edox <- setReadable(enrich.result, 'org.Hs.eg.db', 'ENTREZID')       
+  
+  pdf(file = paste0("./results/","SVAClusterProfileGOcnetplot.",comparison,".pdf"))
+    print(cnetplot(edox, showCategory = 5, foldChange=geneList ))
+  dev.off()  
+  }
+}
+```
+
+Sólo se obtienen resultados para la comparación ELI vs SFI:
+
+```{r cnetplot1.2, echo = FALSE, fig.cap="Net diagram showing the gene ontology for ELIvsSFI"}
+include_graphics("results/SVAClusterProfileGOcnetplot.ELIvsSFI.pdf")
+```
+
+\newpage
+
+Esta es la tabla resultante:
+
+```{r tableCP, echo=FALSE}
+Tab.react <- read.csv2(file.path("./results/SVAClusterProfileGO.Results.ELIvsSFI.csv"), 
+                       sep = ",", header = TRUE)
+
+Tab.react <- Tab.react[1:4, 1:5]
+knitr::kable(Tab.react, booktabs = TRUE, caption = "First rows and columns for ClusterProfiler GO on ELIvsSFI comparison")
+```
+
+# 4. Resultados
+
+Se obtienen los siguientes ficheros como resultados del análisis:
+
+* ClusterProfileGO.Results.SFIvsNIT.csv - Resultados GO de la comparación SFIvsNIT.
+* ClusterProfileGOBarplot.SFIvsNIT.pdf - Barplot de GO para la comparación SFIvsNIT.
+* ClusterProfileGOcnetplot.SFIvsNIT.pdf - Cnetplot de GO para la comparación SFIvsNIT.
+* results_ELIvsNIT.csv - Resultados anotados para ELI vs NIT
+* results_ELIvsSFI.csv - Resultados anotados para ELI vs SFI
+* results_FemalevsMale.csv - Resultados anotados para Female vs Male
+* results_SFIvsNIT.csv - Resultados anotados para SFI vs NIT
+* results_sva_ELIvsNIT.csv - Resultados anotados para ELI vs NIT sin efecto batch oculto
+* results_sva_ELIvsSFI.csv - Resultados anotados para ELI vs SFI sin efecto batch oculto
+* results_sva_SFIvsNIT.csv - Resultados anotados para SFI vs NIT sin efecto batch oculto
+* SVAClusterProfileGO.Results.ELIvsSFI.csv- Resultados de GO para la comparación ELIvsSFI sin efecto batch oculto.
+* SVAClusterProfileGOBarplot.ELIvsSFI.pdf - Barplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
+* SVAClusterProfileGOcnetplot.ELIvsSFI.pdf - Cnetplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
+
+# 5. Discusión
+
+No tenemos información de los lotes, por lo que me ha parecido apropiado hacer el análisis tanto directamente con los datos como eliminando el efecto batch oculto. Los resultados son bastante distintos, se debería escoger el más adecuado.
+
+# 6. Bibliografía
