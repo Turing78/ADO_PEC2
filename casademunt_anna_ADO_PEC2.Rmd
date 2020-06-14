@@ -29,11 +29,11 @@ knitr::opts_chunk$set(echo = TRUE)
 \newpage
 # Abstract
 
-Disponemos de muestras de tejido tiroideo procedentes del repositorio GTEx, @Lonsdale2013, y pertenecientes a tres grupos: "Non infiltrated tissues" (NIT), "Small local infiltrates" (SFI), "Extensive lymphoid infiltrates" (ELI). Seleccionando 10 muestras de cada grupo, analizaremos los genes diferencialmente expresados separando por grupo y sexo sin considerar el efecto batch, y por grupo eliminando el efecto batch oculto.
+Disponemos de muestras de tejido tiroideo procedentes del repositorio GTEx, ver @Lonsdale2013, y pertenecientes a tres grupos: "Non infiltrated tissues" (NIT), "Small local infiltrates" (SFI), "Extensive lymphoid infiltrates" (ELI). Seleccionando 10 muestras de cada grupo, analizaremos los genes diferencialmente expresados separando por grupo y sexo sin considerar el efecto batch, y por grupo eliminando el efecto batch oculto.
 
 # Objetivos
 
-Realizaremos un análisis de los datos de expresión (RNA-Seq) para encontrar genes diferencialmente expresados (DEG) en estos 3 grupos.
+Realizaremos un análisis de los datos de expresión (RNA-Seq) para encontrar genes diferencialmente expresados (DEG) entre dos factores:grupo y sexo. Luego repetiremos el mismo análisis por grupo añadiendo al diseño las correcciones SVA para eliminar el efecto batch oculto.
 
 # Materiales y Métodos
 
@@ -59,11 +59,11 @@ y una tabla *targets.csv* con 292 observaciones de 9 variables, que corresponden
 * Group: "NIT", "SFI" o "ELI"
 * Short_name
 
-Escogeremos aleatoriamente 10 muestras de cada grupo de análisis.
+Escogeremos aleatoriamente 10 muestras de cada grupo de análisis. Los datos de tipo molecular "Allele-Specific Expression" se tratarán como si fueran de "RNA SEQ(NGS)".
 
 ### 1.2. Tipo de experimento
 
-El tipo de experimento es un análisis de genes diferencialmente expresados de RNA-seq y Allele-Specific Expression.
+El tipo de experimento es un análisis de genes diferencialmente expresados de RNA-seq.
 
 ### 1.3. Diseño experimental
 
@@ -72,7 +72,7 @@ Para el diseño del experimento se considerarán dos factores:
 * *Grupo-analisis* que renombramos a simplemente grupo y que tiene tres niveles: el nivel de control NIT (tejido no infiltrado), el nivel medio SFI (infiltración pequeña local)
 y el nivel alto ELI (infiltración extensiva de linfoides). Consideraremos las tres comparaciones posibles: **SFI vs NIT**, **ELI vs NIT** y **ELI vs SFI**.
 
-* *Sexo*, comparación entre los dos niveles, femenino vs masculino, que pueden tener distinta expresión en el tejido tiroideo. En el gráfico [3.4.4 PCA plot] se ve una clara diferenciación. 
+* *Sexo*, comparación entre los dos niveles, femenino vs masculino, que pueden tener distinta expresión en el tejido tiroideo. En el gráfico [3.4.4. PCA plot] se ve una clara diferenciación. 
 
 ## 2. Procedimiento y métodos
 
@@ -110,7 +110,6 @@ if(!require(BiocParallel)) BiocManager::install("BiocParallel")
 if(!require(genefilter)) BiocManager::install("genefilter")
 if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
 if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
-if(!require(ReportingTools)) BiocManager::install("ReportingTools")
 if(!require(sva)) BiocManager::install("sva")
 if(!require(Gviz)) BiocManager::install("Gviz")
 if(!require(limma)) BiocManager::install("limma")
@@ -126,6 +125,7 @@ if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
 if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
 if(!require(kableExtra)) install.packages("kableExtra", dep=TRUE)
 if(!require(tibble)) install.packages("tibble", dep=TRUE)
+if(!require(knitr)) install.packages("knitr", dep=TRUE)
 
 ```
 
@@ -139,6 +139,7 @@ Importamos los datos del fichero targets y seleccionamos, con la semilla 5154 (p
 
 ```{r importTargets, echo = FALSE}
 setwd(".")
+library(knitr)
 set.seed(5154)
 targets <- read.csv("./data/targets.csv",stringsAsFactors = FALSE)
 
@@ -161,7 +162,7 @@ counts <- read.csv2("./data/counts.csv",stringsAsFactors = FALSE, row.names = 1)
 str(counts[,1:6])
 ```
 
-Las columnas de counts corresponden con la columna Sample_names en los targets, aunque los separadores son puntos en lugar de guiones. Sustituimos con *str_replace_all* y generamos el data frame **Datos** con las 30 columnas seleccionadas en el paso anterior. Mostramos las 10 primeras filas. Sustituimos los nombres de las columnas por el valor *SRA_Sample* de **SubTargets**.
+Las columnas de counts corresponden con la columna Sample_names en los targets, aunque los separadores son puntos en lugar de guiones. Sustituimos con *str_replace_all* y generamos el data frame **Datos** con las 30 columnas seleccionadas en el paso anterior. Sustituimos los nombres de las columnas por el valor *SRA_Sample* de **SubTargets**. Mostramos la cabecera de **Datos**. 
 
 ```{r generateDF, echo = FALSE}
 Datos <- data.frame(row.names = rownames(counts))
@@ -184,7 +185,7 @@ rownames(Datos) <- gsub("\\..*", "", rownames(Datos), fixed = FALSE)
 
 ### 3.2. Definir los modelos genéticos
 
-Para conseguir los datos de los exones de cada tránscrito uso la librería **EnsDb.Hsapiens.v75**. La función *exonBy* filtra los valores requerimos a partir de los nombres de las filas de **Datos**.
+Para conseguir los datos de los exones de cada tránscrito usamos la librería **EnsDb.Hsapiens.v75**. La función *exonBy* filtra los valores requeridos a partir de los nombres de las filas de **Datos**.
 
 ```{r importEnsDb, echo=FALSE, message=FALSE}
 library(EnsDb.Hsapiens.v75)
@@ -236,7 +237,7 @@ rowRanges(dds)<-ebg
 
 Hay dos partes en este pipeline. En el primero se realizan transformaciones de los counts para explorar visualmente las relaciones entre las muestras. En la segunda parte se vuelve a los counts crudos originales para el testing estadístico. Esto es crítico ya que los métodos estadísticos dependen de los datos de counts originales para calcular la precisión de las medidas.
 
-#### 3.4.1 Pre-filtrando el dataset
+#### 3.4.1. Pre-filtrando el dataset
 
 El pre-filtrado no es estrictamente necesario pero eliminando los counts bajos se reduce el tiempo de computación de las transformaciones siguientes. Filtramos un mínimo de 10 counts.
 
@@ -248,7 +249,7 @@ post <- nrow(dds)
 
 Pasamos de `r pref` a `r post` filas a considerar.
 
-#### 3.4.2 La transformación estabilizando la varianza
+#### 3.4.2. La transformación estabilizando la varianza
 
 Aplicamos la función *vst* (variance stabilizing transformation), que es mucho más rápida de calcular y menos sensible a outliers de counts altos que la función *rlog* y está recomendada para datasets grandes. Obtenemos el objeto **vsd**.
 
@@ -258,15 +259,16 @@ vsd <- vst(dds, blind = FALSE)
 
 \newpage
 
-#### 3.4.3 Samples distances
+#### 3.4.3. Distancias entre las muestras
 
 Visualizamos las distancias en **vsd** en el heatmap siguiente, usando la función *pheatmap*. Las distancias entre las muestras se proveen a la función manualmente.
+A menor distancia, más fuerte es el tono de azul. Así vemos un primer cuadro de elementos cercanos formado principalmente por elementos del grupo ELI, y otro cuadro mayor con SFI y NIT.
 
 ```{r sampleDist, echo = FALSE}
 sampleDists <- dist(t(assay(vsd)))
 ```
 
-```{r pheatmap, echo=FALSE, message=FALSE, fig.align='center', fig.width=6, fig.height=4}
+```{r pheatmap, echo=FALSE, message=FALSE, fig.align='center', fig.width=5, fig.height=3.5, fig.cap="Pheatmap showing the sample distances"}
 library("pheatmap")
 library("RColorBrewer")
 
@@ -280,11 +282,11 @@ pheatmap(sampleDistMatrix,
          col = colors)
 ```
 
-#### 3.4.4 PCA plot
+#### 3.4.4. Gráfico PCA
 
 Hacemos un gráfico PCA con los datos **vsd**. Cada combinación de grupo tiene un color y cada sexo una forma. Se ve una clara diferenciación en ambos factores.
 
-```{r pca,echo=FALSE, fig.align='center', fig.width=6, fig.height=3}
+```{r pca,echo=FALSE, fig.align='center', fig.width=4, fig.height=2.2, fig.cap="Principal Components Analisis Plot"}
 library(ggplot2)
 pcaData <- plotPCA(vsd, intgroup = c("grupo","sexo"), returnData=TRUE)
 
@@ -346,7 +348,7 @@ Sumas <- c(Sumas, sum(res3$padj < 0.05, na.rm=TRUE))
 kable(matrix(Sumas,ncol =3), col.names = Nombres)
 ```
 
-#### 3.5.1 SFI vs NIT
+#### 3.5.1. SFI vs NIT
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -366,7 +368,7 @@ as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.5.1 ELI vs NIT
+#### 3.5.2. ELI vs NIT
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -383,7 +385,7 @@ as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange, decreasing = TRUE), ]),  r
 , ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.5.1 ELI vs SFI
+#### 3.5.3. ELI vs SFI
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -400,7 +402,7 @@ as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.5.1 Female vs Male
+#### 3.5.4. Female vs Male
 
 Mostramos el sumario de la comparación Female vs Male:
 
@@ -427,15 +429,13 @@ as_tibble(head(res4Sig[ order(res4Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-\newpage
-
 ### 3.6. Representando los resultados
 
-#### 3.6.1 Counts-Plot
+#### 3.6.1. Counts-Plot
 
-Realizamos un Counts-Plot para la comparación ELI vs NIT. Se observa que el gen más significativo tiene un counts más elevado en SFI para mujeres que para hombres.
+Realizamos un Counts-Plot para la comparación ELI vs NIT tras eliminar el efecto batch oculto. Se observa que el gen más significativo tiene un counts más elevado en SFI para mujeres que para hombres.
 
-```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE, fig.cap="Counts-Plot for ELI vs NIT"}
 topGene2 <- rownames(res2)[which.min(res2$padj)]
 
 library("ggbeeswarm")
@@ -446,11 +446,11 @@ ggplot(geneCounts, aes(x = grupo, y = count, color = sexo, group = sexo)) +
   scale_y_log10() + geom_point(size = 3) + geom_line()
 ```
 
-#### 3.6.2 Diagrama de Venn
+#### 3.6.2. Diagrama de Venn
 
 Este diagrama nos sirve para ver las coincidencias entre los diferentes contrastes.
 
-```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+```{r message=FALSE, fig.align='center', fig.width=4, fig.height=3, echo=FALSE, fig.cap="Venn's Diagram"}
 results.SFI_NIT <- as.data.frame(results(dds, contrast=c("grupo","SFI","NIT"))) %>% 
   rownames_to_column("EnsemblID")  
 results.ELI_NIT <- as.data.frame(results(dds, contrast=c("grupo","ELI","NIT"))) %>% 
@@ -466,11 +466,11 @@ vennDiagram(venn_data, cex=0.9)
 
 \newpage
 
-#### 3.6.3 Clustering de los genes
+#### 3.6.3. Clustering de los genes
 
 Seleccionamos los 20 genes con la varianza más alta, usando los datos **vsd** y hacemos un *pheatmap*.
 
-```{r message= FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+```{r message= FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE, fig.cap="Pheatmap showing the gene clustering"}
 library("genefilter")
 topVarGenes <- head(order(rowVars(assay(vsd)), decreasing = TRUE), 20)
 
@@ -480,7 +480,7 @@ anno <- as.data.frame(colData(vsd)[, c("grupo","sexo")])
 pheatmap(mat, annotation_col = anno)
 ```
 
-#### 3.6.4 Representando los cambios de expresión en el espacio genómico 
+#### 3.6.4. Representando los cambios de expresión en el espacio genómico 
 
 Hemos añadido previamente los datos de los exones a **dds** como *rowranges*. Esto nos permite realizar un gráfico en el espacio genómico.
 
@@ -515,9 +515,11 @@ status <- factor(ifelse(res1GRsub$padj < 0.1 & !is.na(res1GRsub$padj), "sig", "n
  
 \newpage 
  
-##### 3.6.4.1 SFI vs NIT
+##### 3.6.4.1. SFI vs NIT
 
-```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+Representación de los cambios de expresión en el espacio genómico para SFI vs NIT. Observamos cambios significativos en los genes ENGS00000182109 y PPIEL.
+
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE, fig.cap="log2fold change in the genomic space for SFI vs NIT"}
 options(ucscChromosomeNames = FALSE)
 g <- GenomeAxisTrack()
 a <- AnnotationTrack(res1GRsub, name = "gene ranges", feature = status)
@@ -529,7 +531,9 @@ plotTracks(list(g, d, a), groupAnnotation = "grupo",
 
 \newpage
 
-##### 3.6.4.2 ELI vs NIT
+##### 3.6.4.2. ELI vs NIT
+
+Representación de los cambios de expresión en el espacio genómico para SFI vs NIT. Observamos cambios significativos en los genes MORC4, RNF128, TBC1D8 y FDRMPD3-AS1.
 
 ```{r, message=FALSE, echo=FALSE}
 res2GR <- results(dds, name="grupo_ELI_vs_NIT", format="GRanges")
@@ -555,7 +559,7 @@ res2GRsub$group <- ifelse(naOrDup, names(res2GRsub), res2GRsub$symbol)
 status <- factor(ifelse(res2GRsub$padj < 0.1 & !is.na(res2GRsub$padj), "sig", "notsig"))
 ```
 
-```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE, fig.cap="log2fold change in the genomic space for ELI vs NIT"}
 options(ucscChromosomeNames = FALSE)
 g <- GenomeAxisTrack()
 a <- AnnotationTrack(res2GRsub, name = "gene ranges", feature = status)
@@ -567,9 +571,9 @@ plotTracks(list(g, d, a), groupAnnotation = "grupo",
 
 \newpage
 
-##### 3.6.4.3 Female vs Male
+##### 3.6.4.3. Female vs Male
 
-En este caso se representan los cambios en el log fold por sexo.
+En este caso se representan los cambios en el log2 fold por sexo. Observamos cambios significativos en el gen GEMIN5.
 
 ```{r, message=FALSE, echo=FALSE}
 res4GR <- results(dds, name="sexo_female_vs_male", format="GRanges")
@@ -596,7 +600,7 @@ res4GRsub$group <- ifelse(naOrDup, names(res4GRsub), res4GRsub$symbol)
 status <- factor(ifelse(res4GRsub$padj < 0.1 & !is.na(res4GRsub$padj), "sig", "notsig"))
 ```
 
-```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE, fig.cap="log2fold change in the genomic space for female vs male"}
 options(ucscChromosomeNames = FALSE)
 g <- GenomeAxisTrack()
 a <- AnnotationTrack(res4GRsub, name = "gene ranges", feature = status)
@@ -614,7 +618,7 @@ Usamos la función *mapIds* de la librería **AnnotationDbi** para añadir infor
 library("AnnotationDbi")
 ```
 
-#### 3.7.1 SFI vs NIT
+#### 3.7.1. SFI vs NIT
 
 ```{r, message=FALSE, echo=FALSE}
 res1$symbol <- mapIds(org.Hs.eg.db,
@@ -642,7 +646,7 @@ as_tibble(head(res1Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.7.2 ELI vs NIT
+#### 3.7.2. ELI vs NIT
 
 ```{r, message=FALSE, echo=FALSE}
 res2$symbol <- mapIds(org.Hs.eg.db,
@@ -670,7 +674,7 @@ as_tibble(head(res2Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.7.3 ELI vs SFI
+#### 3.7.3. ELI vs SFI
 
 ```{r, message=FALSE, echo=FALSE}
 res3$symbol <- mapIds(org.Hs.eg.db,
@@ -698,7 +702,7 @@ as_tibble(head(res3Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.7.4 Female vs Male
+#### 3.7.4. Female vs Male
 
 ```{r, message=FALSE, echo=FALSE}
 res4$symbol <- mapIds(org.Hs.eg.db,
@@ -726,7 +730,7 @@ as_tibble(head(res4Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.7.5 Exportando los resultados
+#### 3.7.5. Exportando los resultados
 
 Observamos que para muchos de los tránscritos no hay símbolo, entrezID ni nombre. Si extraemos el biotipo de gen usando la librería **biomart** obtenemos la siguiente tabla de la comparación ELI vs NIT (omitiendo los biotipos que reúnen menos de 500 tránscritos): 
 
@@ -778,7 +782,7 @@ res4OrderedDF <- as.data.frame(res4Ordered)
 write.csv(res4OrderedDF, file = "./results/results_FemalevsMale.csv")
 ```
 
-### 3.8 Significación biológica
+### 3.8. Significación biológica
 
 Interpretar los resultados comporta analizar la lista de genes obtenida y ver que funciones, procesos biológicos o pathways de moléculas aparecen con mayor frecuencia. Al filtrar los genes la selección debería ser menos restrictiva que la realizada anteriormente, por lo que quitamos el filtro por lfcThreshold. Usamos el paquete **ClusterProfile**, siguiendo las instrucciones que se encuentran en @Yu2020.
 
@@ -789,9 +793,11 @@ Para empezar necesitamos un vector de genes para cada comparación escogida con 
 topTab_SFIvsNIT <- as.data.frame(results(dds, contrast=c("grupo","SFI","NIT")))
 topTab_ELIvsNIT <- as.data.frame(results(dds, contrast=c("grupo","ELI","NIT")))
 topTab_ELIvsSFI <- as.data.frame(results(dds, contrast=c("grupo","ELI","SFI")))
+#topTab_femalevsmale <- as.data.frame(results(dds, contrast=c("sexo","female","male")))
 listOfTables <- list(SFIvsNIT  = topTab_SFIvsNIT,
                      ELIvsNIT  = topTab_ELIvsNIT,
                      ELIvsSFI  = topTab_ELIvsSFI
+                     #,femalevsmale = topTab_femalevsmale
                      )
 listOfSelected <- list()
 v_countNA <- c()
@@ -813,13 +819,13 @@ for (i in 1:length(listOfTables)){
   listOfSelected[[i]] <- sort(listOfSelected[[i]], decreasing = TRUE)
   names(listOfSelected)[i] <- names(listOfTables)[i]
 }
-kable(matrix(sapply(listOfSelected, length),ncol=3), col.names = names(listOfSelected))
+kable(matrix(sapply(listOfSelected, length),nrow=1), col.names = names(listOfSelected))
 ```
 
 Hemos eliminado los tránscritos que no tienen entrezID asociados. Si no lo hubiéramos hecho los números serían:
 
 ```{r, echo = FALSE}
-kable(matrix(v_countNA,ncol =3), col.names = names(listOfSelected))
+kable(matrix(v_countNA,nrow =1), col.names = names(listOfSelected))
 ```
 
 Hay funciones separadas para Gene Onthology y KEGG (pathway), *enrichGO* y *enrichKEGG*. Ejecutar la segunda opción no da resultados por lo que no se incluye. 
@@ -850,14 +856,14 @@ for (i in 1:length(listOfSelected)){
              file =paste0("./results/","ClusterProfileGO.Results.",comparison,".csv"), 
              row.names = FALSE)
     
- pdf(file=paste0("./results/","ClusterProfileGOBarplot.",comparison,".pdf"))
+ pdf(file=paste0("./results/","ClusterProfileGO_Barplot.",comparison,".pdf"))
     print(barplot(enrich.result, showCategory = 10, font.size = 9, 
             title = paste0("ClusterProfiler GO Pathway Analysis for ", comparison,". Barplot")))
   dev.off()    
     
    edox <- setReadable(enrich.result, 'org.Hs.eg.db', 'ENTREZID')       
   
-  pdf(file = paste0("./results/","ClusterProfileGOcnetplot.",comparison,".pdf"))
+  pdf(file = paste0("./results/","ClusterProfileGO_cnetplot.",comparison,".pdf"))
     print(cnetplot(edox, showCategory = 5, foldChange=geneList ))
   dev.off()  
   }
@@ -868,12 +874,12 @@ for (i in 1:length(listOfSelected)){
 Mostramos el gráfico de red para la comparación SFI vs NIT, que es la única que da resultados:
 
 ```{r cnetplot2.2, echo = FALSE, fig.cap="Net diagram showing the gene ontology for SFIvsNIT"}
-include_graphics("results/ClusterProfileGOcnetplot.SFIvsNIT.pdf")
+include_graphics("results/ClusterProfileGO_cnetplot.SFIvsNIT.pdf")
 ```
 
 \newpage
 
-I la tabla correspondiente:
+Y la tabla correspondiente:
 
 ```{r tableCP2, echo=FALSE}
 Tab.react <- read.csv2(file.path("./results/ClusterProfileGO.Results.SFIvsNIT.csv"), 
@@ -888,7 +894,7 @@ knitr::kable(Tab.react, booktabs = TRUE, caption = "First rows and columns for C
 
 Suponiendo que los 30 experimentos seleccionados no se han realizado en el mismo batch, es interesante intentar eliminar los efectos batch ocultos.
 
-#### 3.9.1 Usando SVA con DESeq2
+#### 3.9.1. Usando SVA con DESeq2
 
 Para ello usamos la librería **sva**. Ésta crea las variables sustitutas SV1 Y SV2, que añadimos como columnas a los datos **dds** creando la nueva tabla **ddssva** y luego también al diseño. 
 
@@ -910,7 +916,7 @@ ddssva$SV2 <- svseq$sv[,2]
 design(ddssva) <- ~ SV1 + SV2 + grupo
 ```
 
-#### 3.9.2 Análisis de expresión diferencial
+#### 3.9.2. Análisis de expresión diferencial
 
 Ejecutamos el pipeline de expresión diferencial con el nuevo diseño usando la función *DESeq* sobre los datos **ddssva**. Usamos el mismo log2 fold change threshold para filtrar los valores más significativos.
 
@@ -962,7 +968,7 @@ Sumas <- c(Sumas, sum(res3$padj < 0.05, na.rm=TRUE))
 kable(matrix(Sumas,ncol =3), col.names = Nombres)
 ```
 
-##### 3.9.2.1 SFI vs NIT
+##### 3.9.2.1. SFI vs NIT
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -982,7 +988,7 @@ as_tibble(head(res1Sig[ order(res1Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-##### 3.9.2.2 ELI vs NIT
+##### 3.9.2.2. ELI vs NIT
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -999,7 +1005,7 @@ as_tibble(head(res2Sig[ order(res2Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-##### 3.9.2.3 ELI vs SFI
+##### 3.9.2.3. ELI vs SFI
 
 Mostramos los genes significativos de los que se ha reducido más la expresión:
 
@@ -1016,13 +1022,15 @@ as_tibble(head(res3Sig[ order(res3Sig$log2FoldChange, decreasing = TRUE), ]),  r
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-#### 3.9.3 Representando los resultados
+\newpage
 
-##### 3.9.3.1 Counts-Plot
+#### 3.9.3. Representando los resultados
+
+##### 3.9.3.1. Counts-Plot
 
 Realizamos un Counts-Plot para la comparación ELI vs NIT. Se observa un cambio: el gen más significativo aún tiene un counts más elevado en SFI para mujeres que para hombres, pero ahora tiene un counts más elevado para hombres en el grupo ELI.
 
-```{r message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+```{r message=FALSE, fig.align='center', fig.width=5, fig.height=3, echo=FALSE, fig.cap="Counts-Plot for ELI vs NIT"}
 topGene2 <- rownames(res2)[which.min(res2$padj)]
 
 library("ggbeeswarm")
@@ -1033,11 +1041,11 @@ ggplot(geneCounts, aes(x = grupo, y = count, color = sexo, group = sexo)) +
   scale_y_log10() + geom_point(size = 3) + geom_line()
 ```
 
-##### 3.9.3.2 Diagrama de Venn
+##### 3.9.3.2. Diagrama de Venn
 
-Este diagrama nos sirve para ver las coincidencias entre los diferentes contrastes.
+Observamos las coincidencias entre los diferentes contrastes tras eliminar el efecto batch oculto. Vemos que los genes significativos de la comparación ELI vs SFI han aumentado, tanto los comunes con ELI vs NIT como los no comunes con ninguna comparación. 
 
-```{r, message=FALSE, fig.align='center', fig.width=5, fig.height=4, echo=FALSE}
+```{r, message=FALSE, fig.align='center', fig.width=3, fig.height=2.5, echo=FALSE, fig.cap="Venn's Diagram with SVA"}
 
 results.sva.SFI_NIT <- as.data.frame(results(ddssva, contrast=c("grupo","SFI","NIT"))) %>% 
   rownames_to_column("EnsemblID")  
@@ -1068,7 +1076,9 @@ vennDiagram(venn_data3, cex=0.9)
 vennDiagram(venn_data2, cex=0.9)
 ```
 
-##### 3.9.3.3 Representando los cambios de expresión en el espacio genómico 
+\newpage
+
+##### 3.9.3.3. Representando los cambios de expresión en el espacio genómico 
 
 Repetimos los gráficos para SFI vs NIT y ELI vs NIT para los datos **ddssva**.
 
@@ -1096,9 +1106,11 @@ res1GRsub$group <- ifelse(naOrDup, names(res1GRsub), res1GRsub$symbol)
 status <- factor(ifelse(res1GRsub$padj < 0.1 & !is.na(res1GRsub$padj), "sig", "notsig"))
 ```
 
-###### 3.9.3.4.1 SFI vs NIT
+###### 3.9.3.3.1. SFI vs NIT
 
-```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+El gráfico no ha variado. Observamos de nuevo cambios significativos en los genes ENGS00000182109 y PPIEL.
+
+```{r fig.align='center', fig.width=7, fig.height=5, echo=FALSE, fig.cap="log2fold change in the genomic space for SFI vs NIT (SVA)"}
 options(ucscChromosomeNames = FALSE)
 g <- GenomeAxisTrack()
 a <- AnnotationTrack(res1GRsub, name = "gene ranges", feature = status)
@@ -1108,7 +1120,11 @@ plotTracks(list(g, d, a), groupAnnotation = "grupo",
            notsig = "grey", sig = "hotpink")
 ```
 
-###### 3.9.3.4.2 ELI vs NIT
+\newpage
+
+###### 3.9.3.3.2. ELI vs NIT
+
+El gráfico es completamente distinto. Observamos que los genes expresados significativamente son ahora los dos mismos que para SFI vs NIT, sumandole BMP8B, MFSD2A y COL9A2.
 
 ```{r, message=FALSE, echo=FALSE}
 res2GR <- results(ddssva, name="grupo_ELI_vs_NIT", format="GRanges")
@@ -1135,7 +1151,7 @@ res2GRsub$group <- ifelse(naOrDup, names(res2GRsub), res2GRsub$symbol)
 status <- factor(ifelse(res2GRsub$padj < 0.1 & !is.na(res2GRsub$padj), "sig", "notsig"))
 ```
 
-```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE}
+```{r fig.align='center', fig.width=7, fig.height=6, echo=FALSE, fig.cap="log2fold change in the genomic space for ELI vs NIT (SVA)"}
 options(ucscChromosomeNames = FALSE)
 g <- GenomeAxisTrack()
 a <- AnnotationTrack(res2GRsub, name = "gene ranges", feature = status)
@@ -1145,7 +1161,7 @@ plotTracks(list(g, d, a), groupAnnotation = "grupo",
            notsig = "grey", sig = "hotpink")
 ```
 
-#### 3.9.4 Anotación y exportación de los resultados
+#### 3.9.4. Anotación y exportación de los resultados
 
 Usamos la función *mapIds* de la libreria **AnnotationDbi** para añadir información adicional a nuestra tabla de genes, que de momento sólo contiene EnsemblID. Los ordenamos por p-valor y mostramos los primeros 5, recortando la parte del medio del ID de Ensembl para ahorrar espacio.
 
@@ -1153,7 +1169,7 @@ Usamos la función *mapIds* de la libreria **AnnotationDbi** para añadir inform
 library("AnnotationDbi")
 ```
 
-##### 3.9.4.1 SFI vs NIT
+##### 3.9.4.1. SFI vs NIT
 
 ```{r, echo=FALSE}
 res1$symbol <- mapIds(org.Hs.eg.db,
@@ -1182,7 +1198,7 @@ as_tibble(head(res1Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-##### 3.9.4.2 ELI vs NIT
+##### 3.9.4.2. ELI vs NIT
 
 ```{r, echo=FALSE}
 res2$symbol <- mapIds(org.Hs.eg.db,
@@ -1210,7 +1226,7 @@ as_tibble(head(res2Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-##### 3.9.4.3 ELI vs SFI
+##### 3.9.4.3. ELI vs SFI
 
 ```{r, echo=FALSE}
 res3$symbol <- mapIds(org.Hs.eg.db,
@@ -1238,20 +1254,20 @@ as_tibble(head(res3Ordered),  rownames = pkgconfig::get_config("tibble::rownames
 ) %>% rownames_to_column(var="EnsemblID")
 ```
 
-##### 3.9.4.4  Exportando los resultados
+##### 3.9.4.4.  Exportando los resultados
 
-Los guardamos en la carpeta de resultados como results_sva_*comparación*.
+Los guardamos en la carpeta de resultados como SVA_results_*comparación*.
 
 ```{r, echo=FALSE}
 res1OrderedDF <- as.data.frame(res1Ordered)
-write.csv(res1OrderedDF, file = "./results/results_sva_SFIvsNIT.csv")
+write.csv(res1OrderedDF, file = "./results/SVA_results_SFIvsNIT.csv")
 res2OrderedDF <- as.data.frame(res2Ordered)
-write.csv(res2OrderedDF, file = "./results/results_sva_ELIvsNIT.csv")
+write.csv(res2OrderedDF, file = "./results/SVA_results_ELIvsNIT.csv")
 res3OrderedDF <- as.data.frame(res3Ordered)
-write.csv(res3OrderedDF, file = "./results/results_sva_ELIvsSFI.csv")
+write.csv(res3OrderedDF, file = "./results/SVA_results_ELIvsSFI.csv")
 ```
 
-#### 3.9.5 Significación biológica
+#### 3.9.5. Significación biológica
 
 Re-interpretamos los resultados con los nuevos datos **ddssva**. Este es el numero de genes que se obtienen para cada combinación:
 
@@ -1307,17 +1323,17 @@ for (i in 1:length(listOfSelected)){
   
   if (length(rownames(enrich.result@result)) != 0) {
   write.csv(as.data.frame(enrich.result), 
-             file =paste0("./results/","SVAClusterProfileGO.Results.",comparison,".csv"), 
+             file =paste0("./results/","SVA_ClusterProfileGO.Results.",comparison,".csv"), 
              row.names = FALSE)
     
- pdf(file=paste0("./results/","SVAClusterProfileGOBarplot.",comparison,".pdf"))
+ pdf(file=paste0("./results/","SVA_ClusterProfileGO_Barplot.",comparison,".pdf"))
     print(barplot(enrich.result, showCategory = 10, font.size = 9, 
             title = paste0("ClusterProfiler GO Pathway Analysis for ", comparison,". Barplot")))
   dev.off()    
     
    edox <- setReadable(enrich.result, 'org.Hs.eg.db', 'ENTREZID')       
   
-  pdf(file = paste0("./results/","SVAClusterProfileGOcnetplot.",comparison,".pdf"))
+  pdf(file = paste0("./results/","SVA_ClusterProfileGO_cnetplot.",comparison,".pdf"))
     print(cnetplot(edox, showCategory = 5, foldChange=geneList ))
   dev.off()  
   }
@@ -1327,7 +1343,7 @@ for (i in 1:length(listOfSelected)){
 Sólo se obtienen resultados para la comparación ELI vs SFI:
 
 ```{r cnetplot1.2, echo = FALSE, fig.cap="Net diagram showing the gene ontology for ELIvsSFI"}
-include_graphics("results/SVAClusterProfileGOcnetplot.ELIvsSFI.pdf")
+include_graphics("results/SVA_ClusterProfileGO_cnetplot.ELIvsSFI.pdf")
 ```
 
 \newpage
@@ -1335,7 +1351,7 @@ include_graphics("results/SVAClusterProfileGOcnetplot.ELIvsSFI.pdf")
 Esta es la tabla resultante:
 
 ```{r tableCP, echo=FALSE}
-Tab.react <- read.csv2(file.path("./results/SVAClusterProfileGO.Results.ELIvsSFI.csv"), 
+Tab.react <- read.csv2(file.path("./results/SVA_ClusterProfileGO.Results.ELIvsSFI.csv"), 
                        sep = ",", header = TRUE)
 
 Tab.react <- Tab.react[1:4, 1:5]
@@ -1346,19 +1362,36 @@ knitr::kable(Tab.react, booktabs = TRUE, caption = "First rows and columns for C
 
 Se obtienen los siguientes ficheros como resultados del análisis:
 
-* ClusterProfileGO.Results.SFIvsNIT.csv - Resultados GO de la comparación SFIvsNIT.
-* ClusterProfileGOBarplot.SFIvsNIT.pdf - Barplot de GO para la comparación SFIvsNIT.
-* ClusterProfileGOcnetplot.SFIvsNIT.pdf - Cnetplot de GO para la comparación SFIvsNIT.
+## Gráficos
+
+* [3.4.3. Distancias entre las muestras]
+* [3.4.4. Gráfico PCA]
+* [3.6.1. Counts-Plot]
+* [3.6.2. Diagrama de Venn]
+* [3.6.3. Clustering de los genes]
+* [3.6.4.1. SFI vs NIT]
+* [3.6.4.2. ELI vs NIT]
+* [3.6.4.3. Female vs Male]
+* [3.9.3.1. Counts-Plot]
+* [3.9.3.2. Diagrama de Venn]
+* [3.9.3.3.1. SFI vs NIT]
+* [3.9.3.3.2. ELI vs NIT]
+
+## Ficheros
+
 * results_ELIvsNIT.csv - Resultados anotados para ELI vs NIT
 * results_ELIvsSFI.csv - Resultados anotados para ELI vs SFI
 * results_FemalevsMale.csv - Resultados anotados para Female vs Male
 * results_SFIvsNIT.csv - Resultados anotados para SFI vs NIT
-* results_sva_ELIvsNIT.csv - Resultados anotados para ELI vs NIT sin efecto batch oculto
-* results_sva_ELIvsSFI.csv - Resultados anotados para ELI vs SFI sin efecto batch oculto
-* results_sva_SFIvsNIT.csv - Resultados anotados para SFI vs NIT sin efecto batch oculto
-* SVAClusterProfileGO.Results.ELIvsSFI.csv- Resultados de GO para la comparación ELIvsSFI sin efecto batch oculto.
-* SVAClusterProfileGOBarplot.ELIvsSFI.pdf - Barplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
-* SVAClusterProfileGOcnetplot.ELIvsSFI.pdf - Cnetplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
+* ClusterProfileGO.Results.SFIvsNIT.csv - Resultados GO de la comparación SFIvsNIT.
+* ClusterProfileGO_Barplot.SFIvsNIT.pdf - Barplot de GO para la comparación SFIvsNIT.
+* ClusterProfileGO-cnetplot.SFIvsNIT.pdf - Cnetplot de GO para la comparación SFIvsNIT.
+* SVA_results_ELIvsNIT.csv - Resultados anotados para ELI vs NIT sin efecto batch oculto
+* SVA_results_ELIvsSFI.csv - Resultados anotados para ELI vs SFI sin efecto batch oculto
+* SVA_results_SFIvsNIT.csv - Resultados anotados para SFI vs NIT sin efecto batch oculto
+* SVA_ClusterProfileGO.Results.ELIvsSFI.csv- Resultados de GO para la comparación ELIvsSFI sin efecto batch oculto.
+* SVA_ClusterProfileGO_Barplot.ELIvsSFI.pdf - Barplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
+* SVA_ClusterProfileGO_cnetplot.ELIvsSFI.pdf - Cnetplot de GO para la comparación ELIvsSFI sin efecto batch oculto.
 
 # 5. Discusión
 
